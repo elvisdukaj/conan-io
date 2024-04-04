@@ -5,6 +5,7 @@ from jinja2 import Template
 
 from conan.errors import ConanException
 from conan.internal import check_duplicated_generator
+from conan.internal.internal_tools import raise_on_universal_arch
 from conan.tools.apple.apple import to_apple_arch, is_apple_os, apple_min_version_flag, \
     apple_sdk_path, get_apple_sdk_fullname
 from conan.tools.build.cross_building import cross_building
@@ -36,6 +37,15 @@ class MesonToolchain(object):
     [project options]
     {% for it, value in project_options.items() -%}
     {{it}} = {{value}}
+    {% endfor %}
+
+    {% for subproject, listkeypair in subproject_options -%}
+    [{{subproject}}:project options]
+    {% for keypair in listkeypair -%}
+    {% for it, value in keypair.items() -%}
+    {{it}} = {{value}}
+    {% endfor %}
+    {% endfor %}
     {% endfor %}
 
     [binaries]
@@ -93,6 +103,7 @@ class MesonToolchain(object):
         :param conanfile: ``< ConanFile object >`` The current recipe object. Always use ``self``.
         :param backend: ``str`` ``backend`` Meson variable value. By default, ``ninja``.
         """
+        raise_on_universal_arch(conanfile)
         self._conanfile = conanfile
         self._os = self._conanfile.settings.get_safe("os")
         self._is_apple_system = is_apple_os(self._conanfile)
@@ -143,7 +154,8 @@ class MesonToolchain(object):
         self.preprocessor_definitions = {}
         # Add all the default dirs
         self.project_options.update(self._get_default_dirs())
-
+        #: Dict-like object that defines Meson ``subproject options``.
+        self.subproject_options = {}
         #: Defines the Meson ``pkg_config_path`` variable
         self.pkg_config_path = self._conanfile.generators_folder
         #: Defines the Meson ``build.pkg_config_path`` variable (build context)
@@ -391,11 +403,20 @@ class MesonToolchain(object):
         if self.gcc_cxx11_abi:
             self.cpp_args.append("-D{}".format(self.gcc_cxx11_abi))
 
+        subproject_options = {}
+        for subproject, listkeypair in self.subproject_options.items():
+            if listkeypair is not None and listkeypair is not []:
+                subproject_options[subproject] = []
+                for keypair in listkeypair:
+                    subproject_options[subproject].append({k: to_meson_value(v) for k, v in keypair.items()})
+
         return {
             # https://mesonbuild.com/Machine-files.html#properties
             "properties": {k: to_meson_value(v) for k, v in self.properties.items()},
             # https://mesonbuild.com/Machine-files.html#project-specific-options
             "project_options": {k: to_meson_value(v) for k, v in self.project_options.items()},
+            # https://mesonbuild.com/Subprojects.html#build-options-in-subproject
+            "subproject_options": subproject_options.items(),
             # https://mesonbuild.com/Builtin-options.html#directories
             # https://mesonbuild.com/Machine-files.html#binaries
             # https://mesonbuild.com/Reference-tables.html#compiler-and-linker-selection-variables
